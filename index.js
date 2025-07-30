@@ -1,7 +1,10 @@
-const express = require("express");
-const cors = require("cors");
-require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
+
+dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -10,10 +13,8 @@ app.use(cors());
 app.use(express.json());
 
 // mongodb connection
-
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.dvaruep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -24,66 +25,82 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
+    const db = client.db('localmarketDB');
+    const parcelsCollection = db.collection('parcels');
 
-const db = client.db('localmarketDB');  //data base name
-const parcelsCollection = db.collection('parcels');  //collection
+    // প্রথম GET রুট (সব প্যাকেজ)
+    app.get('/parcels', async (req, res) => {
+      const products = await parcelsCollection.find().toArray();
+      res.send(products);
+    });
 
-app.get('/parcels', async (req, res) => {
-  const products = await parcelsCollection.find().toArray();
-  res.send(products);
-});
+    // দ্বিতীয় GET রুট (অ্যাচুয়াল কোয়েরি)
+    app.get('/parcels', async (req, res) => {
+      try {
+        const userEmail = req.query.email;
+        const query = userEmail ? { created_by: userEmail } : {};
+        const options = {
+          sort: { createdAt: -1 },
+        };
+        const result = await parcelsCollection.find(query, options).toArray();
+        res.status(200).send(result);
+      } catch (error) {
+        console.error("Failed to fetch parcels:", error);
+        res.status(500).send({ error: "Failed to fetch parcels" });
+      }
+    });
 
-// pacels api
+    // আপনি এই কোডটি আপনার অ্যাপের রুটে যোগ করবেন
 
-app.get('/parcels', async (req, res) => {
+app.delete('/parcels/:id', async (req, res) => {
   try {
-    const userEmail = req.query.email;
+    const { id } = req.params;
 
-    const query = userEmail ? { created_by: userEmail } : {};
-    const options = {
-      sort: { createdAt: -1 },
-    };
+    // ID এর валিডেশন
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid parcel ID' });
+    }
 
-    const result = await parcelsCollection.find(query, options).toArray();
-    res.status(200).send(result);
+    const result = await parcelsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 1) {
+      res.json({ message: 'Parcel deleted successfully', deletedCount: 1 });
+    } else {
+      res.status(404).json({ message: 'Parcel not found' });
+    }
   } catch (error) {
-    console.error("Failed to fetch parcels:", error);
-    res.status(500).send({ error: "Failed to fetch parcels" });
+    res.status(500).json({ message: 'Error deleting parcel', error: error.message });
   }
 });
 
+    // POST নতুন প্যাকেজ যোগ করতে
+    app.post('/parcels', async (req, res) => {
+      try {
+        const parcelData = req.body;
+        const result = await parcelsCollection.insertOne(parcelData);
+        res.status(201).send({ insertedId: result.insertedId });
+      } catch (error) {
+        console.error('Error inserting parcel:', error);
+        res.status(500).send({ error: 'Failed to insert parcel' });
+      }
+    });
 
-// POST: Add new product
-app.post('/parcels', async (req, res) => {
-  try {
-    const parcelData = req.body;
-    const result = await parcelsCollection.insertOne(parcelData);
-    res.status(201).send({ insertedId: result.insertedId });
-  } catch (error) {
-    console.error('Error inserting parcel:', error);
-    res.status(500).send({ error: 'Failed to insert parcel' });
-  }
-});
-
-// Send a ping to confirm a successful connection
+    // পিং কমান্ড (চেক করার জন্য)
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
+    // ক্লায়েন্ট বন্ধ করতে চাইলে uncomment করো
     // await client.close();
   }
 }
 run().catch(console.dir);
 
-
-// Basic route
+// বেসিক রুট
 app.get("/", (req, res) => {
   res.send("Parcel Delivery Server is Running");
 });
 
-// Start server
+// সার্ভার চালু
 app.listen(port, () => {
   console.log(`Server listening on port:${port}`);
 });
