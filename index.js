@@ -1,9 +1,17 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
+import { MongoClient, ServerApiVersion } from 'mongodb';
+// ES Module syntax
+import { ObjectId } from 'mongodb';
+import Stripe from 'stripe';
 
 dotenv.config();
+
+
+const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY); // secret key
+
+
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -11,6 +19,7 @@ const port = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
 
 // mongodb connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.dvaruep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -84,6 +93,59 @@ app.delete('/parcels/:id', async (req, res) => {
         res.status(500).send({ error: 'Failed to insert parcel' });
       }
     });
+
+    // Example route to get parcel by ID
+
+
+
+
+app.get("/parcels/:id", async (req, res) => {
+  const id = req.params.id;
+
+  // validate ObjectId
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid parcel ID" });
+  }
+
+  try {
+    const query = { _id: new ObjectId(id) };
+    const parcel = await parcelsCollection.findOne(query);
+
+    if (!parcel) {
+      return res.status(404).send({ message: "Parcel not found" });
+    }
+
+    res.send(parcel);
+  } catch (error) {
+    console.error("Parcel fetch error:", error.message);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
+
+// payment api
+
+app.post('/create-payment-intent', async (req, res) => {
+  const { amountInCents, parcelId } = req.body;
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amountInCents,
+      currency: 'usd', // অথবা তোমার প্রয়োজনীয় কারেন্সি
+      metadata: { parcelId }, // parcelId যুক্ত করতে পারো
+    });
+
+    res.json({
+      clientSecret: paymentIntent.client_secret,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+
 
     // পিং কমান্ড (চেক করার জন্য)
     await client.db("admin").command({ ping: 1 });
