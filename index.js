@@ -1,16 +1,17 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+
+
 import { MongoClient, ServerApiVersion } from 'mongodb';
 // ES Module syntax
 import { ObjectId } from 'mongodb';
 import Stripe from 'stripe';
 
+
 dotenv.config();
-
-
 const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY); // secret key
-
+console.log("Stripe Key:", process.env.PAYMENT_GATWAY_KEY);
 
 
 const app = express();
