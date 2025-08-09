@@ -8,10 +8,6 @@ import fs from 'fs';
 
 
 dotenv.config();
-
-const serviceAccount = JSON.parse(
-  fs.readFileSync(new URL('./localmarket.firebase.admin.json', import.meta.url), 'utf-8')
-);
 // console.log('Stripe Key:', process.env.PAYMENT_GATWAY_KEY); // নিশ্চিত করতে
 
 const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
@@ -22,6 +18,12 @@ const port = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+
+
+const serviceAccount = JSON.parse(
+  fs.readFileSync(new URL('./localmarket.firebase.admin.json', import.meta.url), 'utf-8')
+);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
@@ -50,7 +52,7 @@ async function run() {
     const paymentsCollection = db.collection('payments');
 
     // meddlewere
-   const veryfyFBToken = async (req, res, next) => {
+   const verifyFBToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).send({ message: 'Unauthorized access' });
@@ -84,7 +86,7 @@ async function run() {
     });
 
     // Get parcels
-    app.get('/parcels',veryfyFBToken, async (req, res) => {
+    app.get('/parcels', veryfyFBToken, async (req, res) => {
       try {
         const userEmail = req.query.email;
         const query = userEmail ? { created_by: userEmail } : {};
