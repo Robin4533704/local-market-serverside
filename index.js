@@ -6,7 +6,7 @@ import { MongoClient, ServerApiVersion } from 'mongodb';
 
 import Stripe from 'stripe';
 import admin from 'firebase-admin';
-import fs from 'fs';
+// import fs from 'fs';
 
 dotenv.config();
 
@@ -18,15 +18,15 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const serviceAccount = JSON.parse(
-  fs.readFileSync(
-    new URL('./localmarket.firebase.admin.json', import.meta.url),
-    'utf-8'
-  )
-);
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// const serviceAccount = JSON.parse(
+//   fs.readFileSync(
+//     new URL('./localmarket.firebase.admin.json', import.meta.url),
+//     'utf-8'
+//   )
+// );
+// admin.initializeApp({
+//   credential: admin.credential.cert(serviceAccount)
+// });
 
 // Middleware: Firebase token verification
 const verifyFBToken = async (req, res, next) => {
