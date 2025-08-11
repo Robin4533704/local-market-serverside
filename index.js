@@ -18,15 +18,12 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// const serviceAccount = JSON.parse(
-//   fs.readFileSync(
-//     new URL('./localmarket.firebase.admin.json', import.meta.url),
-//     'utf-8'
-//   )
-// );
-// admin.initializeApp({
-//   credential: admin.credential.cert(serviceAccount)
-// });
+const serviceAccount = JSON.parse(
+  fs.readFileSync(process.env.FIREBASE_KEY_PATH, "utf-8")
+);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 // Middleware: Firebase token verification
 const verifyFBToken = async (req, res, next) => {
