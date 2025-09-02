@@ -61,29 +61,33 @@ async function run() {
     const paymentsCollection = db.collection('payments');
     const ridersCollection = db.collection('riders');
 
-    // Middleware: Verify Firebase Token
-    const verifyFBToken = async (req, res, next) => {
+const verifyFBToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ message: 'No token provided' });
 
   const token = authHeader.split(' ')[1];
-  if(!token) return res.status(401).send({message: 'token not found'})
-    // veryfy the token using
+  if (!token) return res.status(401).send({ message: 'Token not found' });
+
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
-    req.decoded = decodedToken;  // <-- এখানে email থাকবে
+    console.log("Decoded Firebase Token:", decodedToken); // ✅ debug
+    req.decoded = decodedToken;
     next();
   } catch (err) {
+    console.error("Token verification failed:", err);
     res.status(401).json({ message: 'Invalid token' });
   }
 };
-
 const verifyAdmin = async (req, res, next) => {
   try {
-    const email = req.decoded.email; // Firebase token থেকে email
+    const email = req.decoded?.email;
+    console.log("verifyAdmin checking email:", email); // ✅ debug
+
     if (!email) return res.status(401).json({ message: 'No email in token' });
 
-    const user = await usersCollection.findOne({ email }); // <-- ঠিক করা
+    const user = await usersCollection.findOne({ email });
+    console.log("verifyAdmin found user:", user); // ✅ debug
+
     if (!user || user.role !== 'admin') {
       return res.status(403).json({ message: 'Forbidden access' });
     }
@@ -95,8 +99,22 @@ const verifyAdmin = async (req, res, next) => {
   }
 };
 
+const verifyRider = async (req, res, next) => {
+  try {
+    const email = req.decoded.email; // Firebase token থেকে email
+    if (!email) return res.status(401).json({ message: 'No email in token' });
 
+    const user = await usersCollection.findOne({ email }); // <-- ঠিক করা
+    if (!user || user.role !== 'rider') {
+      return res.status(403).json({ message: 'Forbidden access' });
+    }
 
+    next();
+  } catch (err) {
+    console.error('verifyAdmin error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
 
 
 
@@ -133,21 +151,8 @@ app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async (req, res) => {
   }
 });
 
-// user post
-// app.post('/users', async (req, res) => {
-//   const userData = req.body;
-//   console.log("Incoming User:", req.body); 
-//   try {
-//     const existingUser = await usersCollection.findOne({ email: userData.email });
-//     if (existingUser) {
-//       return res.status(400).json({ message: 'User already exists' });
-//     }
-//     const result = await usersCollection.insertOne(userData);
-//     res.status(201).json({ insertedId: result.insertedId });
-//   } catch (err) {
-//     res.status(500).json({ message: 'Error creating user', error: err.message });
-//   }
-// });
+
+
 // Example user route
 app.post("/users", async (req, res) => {
   try {
@@ -194,6 +199,8 @@ app.get('/users/search', async (req, res) => {
   }
 });
 
+
+
 // server.js / routes/parcels.js
 app.get('/parcels/:id', async (req, res) => {
   const { id } = req.params;
@@ -205,111 +212,44 @@ app.get('/parcels/:id', async (req, res) => {
   res.json(parcel);
 });
 
- app.get('/parcels', verifyFBToken, async (req, res) => {
+app.get('/parcels', verifyFBToken, async (req, res) => {
   try {
-    const { email, payment_status, delivery_status } = req.query;
+    const { email, payment_status, delivery_status, location } = req.query;
     let query = {};
-    if(email) query = { created_by: email };
-    if(payment_status) query.payment_status = payment_status;
-    if(delivery_status) query.delivery_status = delivery_status;
+    console.log("my objects", req.query);
 
-    const parcels = await parcelsCollection.find(query).sort({ createdAt: -1 }).toArray();
-    res.send(parcels);
-  } catch (err) {
-    res.status(500).send({ error: err.message });
-  }
-});
-
-
-  // assign rider to parcel
-app.patch("/parcels/:id/assign", async (req, res) => {
-  const { id } = req.params;
-  const { riderId, riderName, riderEmail } = req.body;
-
-  try {
-    if (!ObjectId.isValid(id) || !ObjectId.isValid(riderId)) {
-      return res.status(400).send({ message: "Invalid IDs" });
+    // filter by email
+    if (email) {
+      query.created_by = email;
     }
 
-    // 1. update parcel
-    const parcelUpdate = await parcelsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          delivery_status: "rider-assigned",
-          assigned_rider_id: riderId,
-          assigned_rider_name: riderName,
-          assigned_rider_email: riderEmail,
-        },
-      }
-    );
-
-    // 2. update rider
-    const riderUpdate = await ridersCollection.updateOne(
-      { _id: new ObjectId(riderId) },
-      { $set: { work_status: "in-delivery" } }
-    );
-
-    res.send({
-      message: "Rider assigned successfully",
-      parcelUpdate,
-      riderUpdate,
-    });
-  } catch (err) {
-    res.status(500).send({ error: err.message });
-  }
-});
-// PATCH /parcels/:id/status
-app.patch("/parcels/:id/status", async (req, res) => {
-  const { id } = req.params;
-  const { delivery_status } = req.body;
-
-  // Validate status
-  const allowedStatuses = ["rider_assigned", "in-transit", "delivered"];
-  if (!allowedStatuses.includes(delivery_status)) {
-    return res.status(400).json({ error: "Invalid delivery status" });
-  }
-
-  try {
-    const result = await parcelsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { delivery_status } }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ error: "Parcel not found" });
+    // filter by payment status
+    if (payment_status) {
+      query.payment_status = payment_status;
     }
 
-    res.json({ message: `Parcel status updated to ${delivery_status}` });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// Get pending or in-progress parcels assigned to a rider
-app.get("/riders/:riderId/pending-deliveries", async (req, res) => {
-  const { riderId } = req.params;
-
-  try {
-    // Validate riderId
-    if (!riderId) {
-      return res.status(400).json({ error: "Rider ID is required" });
+    // filter by delivery status
+    if (delivery_status) {
+      query.delivery_status = delivery_status;
     }
 
-  
+    // 🔹 filter by location (senderRegion OR receiverRegion)
+    if (location) {
+      query.$or = [
+        { senderRegion: location },
+        { receiverRegion: location }
+      ];
+    }
+
     const parcels = await parcelsCollection
-      .find({
-        assigned_rider_id: riderId, 
-        delivery_status: { $in: ["not_collected", "in-transit"] },
-      })
+      .find(query)
+      .sort({ createdAt: -1 })
       .toArray();
 
-    res.json(parcels);
+    res.send(parcels);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).send({ error: err.message });
   }
 });
 
@@ -331,6 +271,89 @@ app.get("/riders/:riderId/pending-deliveries", async (req, res) => {
       else
         res.status(404).json({ message: 'Parcel not found' });
     });
+// Assign Rider
+app.patch("/parcels/:id/assign-rider", async (req, res) => {
+  const  parcelId  = req.params.id;
+  const { riderId, riderName, riderEmail } = req.body;
+
+  try {
+    // update parcel delivery_status
+    await parcelsCollection.updateOne(
+      { _id: new ObjectId(parcelId) },
+      { 
+        $set: { 
+          delivery_status: "rider_assigned",
+          assigned_rider_id: riderId,
+          assigned_rider_name: riderName,
+          assigned_rider_email: riderEmail
+        } 
+      }
+    );
+
+    // update rider work_status
+    await ridersCollection.updateOne(
+      { _id: new ObjectId(riderId) },
+      { $set: { work_status: "in-delivery" } }
+    );
+
+    res.status(200).send({ message: "Rider assigned successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: err.message });
+  }
+});
+// 2. Update parcel status PATCH
+app.patch("/parcels/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { delivery_status } = req.body;
+
+  if (!delivery_status) {
+    return res.status(400).json({ message: "Status is required" });
+  }
+
+  try {
+    const result = await parcelsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { delivery_status } }
+    );
+
+    if (result.modifiedCount > 0) {
+      res.json({ message: "Status updated successfully" });
+    } else {
+      res.status(404).json({ message: "Parcel not found" });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update status" });
+  }
+});
+
+app.patch("/parcels/:id", async (req, res) => {
+  const { id } = req.params;
+  const { delivery_status } = req.body;
+
+  if (!delivery_status) {
+    return res.status(400).json({ message: "delivery_status is required" });
+  }
+
+  try {
+    const result = await parcelsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { delivery_status } } // ✅ ঠিক করা
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Parcel not found" });
+    }
+
+    res.status(200).json({ message: "Status updated" });
+  } catch (err) {
+    console.error("Update error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+
 
 
 
@@ -354,77 +377,125 @@ app.get("/riders/:riderId/pending-deliveries", async (req, res) => {
       }
     });
 
-    // Riders routes
-    app.post('/riders', async (req, res) => {
-      const rider = req.body;
-      const result = await ridersCollection.insertOne(rider);
-      res
-        .status(201)
-        .send({ message: 'Rider added successfully', insertedId: result.insertedId });
-    });
+   // Rider signup endpoint
+app.post("/riders", async (req, res) => {
+  const riderData = req.body;
 
-  
-
-
-
-
-    // Admin-only: pending riders
-    app.get('/riders/pending', verifyFBToken, verifyAdmin, async (req, res) => {
-      const pendingRiders = await ridersCollection.find({ status: 'pending' }).toArray();
-      res.send(pendingRiders);
-    });
-
-    // Update rider status
-  
-
-// get riders by district (case-insensitive & trimmed)
-app.get('/riders/available',  async (req, res) => {
-  const { district } = req.query;
-  try {
-    if (!district) return res.status(400).send({ error: "District is required" });
-
-    const riders = await ridersCollection.find({
-      district: { $regex: `^${district.trim()}$`, $options: "i" } // case-insensitive match
-    }).toArray();
-    
-    res.send(riders);
-  } catch (err) {
-    res.status(500).send({ error: err.message });
+  if (!riderData.email || !riderData.name) {
+    return res.status(400).json({ message: "Name and email are required" });
   }
-});
-// Make rider available
-app.patch("/riders/:id/available", async (req, res) => {
-  const { id } = req.params;
 
   try {
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ error: "Invalid rider ID" });
+    // 1. Check if user already exists
+    const existingUser = await usersCollection.findOne({ email: riderData.email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User already exists" });
     }
 
-    const result = await ridersCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: "available" } } // make rider available
-    );
+    // 2. Insert into riders collection
+    const riderResult = await ridersCollection.insertOne({
+      ...riderData,
+      status: "pending", // initial status
+      createdAt: new Date(),
+    });
 
-    if (result.matchedCount === 0) {
-      return res.status(404).send({ error: "Rider not found" });
-    }
+    // 3. Also insert into users collection for role management
+    const userResult = await usersCollection.insertOne({
+      name: riderData.name,
+      email: riderData.email,
+      role: "rider",
+      createdAt: new Date(),
+    });
 
-    res.send({ message: "Rider is now available" });
+    res.status(201).json({
+      message: "Rider application submitted successfully",
+      riderId: riderResult.insertedId,
+      userId: userResult.insertedId,
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).send({ error: err.message });
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// Get completed deliveries for a rider
+app.get("/riders/completed-parcels", async (req, res) => {
+  const { email } = req.query;
+
+  // Debug: দেখাবে email আসছে কি না
+  console.log("Fetching completed parcels for rider email:", email);
+
+  if (!email) return res.status(400).json({ message: "Rider email required" });
+
+  try {
+    const parcels = await parcelsCollection
+      .find({
+        assigned_rider_email: email,
+        delivery_status: { $in: ["delivered", "delivered_to_service_center"] },
+      })
+      .toArray();
+
+    const enrichedParcels = parcels.map((p) => {
+      let earning = 0;
+      if (p.delivery_status === "delivered" || p.delivery_status === "delivered_to_service_center") {
+        earning = p.receiverDistrict === p.senderDistrict ? p.cost * 0.8 : p.cost * 0.3;
+      }
+      return { ...p, earning, cashedOut: p.riderCashedOut || false };
+    });
+
+    res.json(enrichedParcels);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Fetch parcels for a rider
+app.get("/riders/parcels", verifyFBToken, async (req, res) => {
+  const email = req.query.email;
+  if (!email) return res.status(400).send({ error: "Rider email missing" });
+
+  try {
+    const parcels = await parcelsCollection
+      .find({ assigned_rider_email: email, status: { $in: ["rider_assigned", "in-transit"] } })
+      .toArray();
+    res.send(parcels);
+  } catch (err) {
+    console.error("Fetch parcels error:", err);
+    res.status(500).send({ error: "Failed to fetch parcels" });
   }
 });
 
 
+// Cash out a completed delivery
+app.patch("/riders/cashout/:parcelId", async (req, res) => {
+  const { parcelId } = req.params;
+
+  if (!ObjectId.isValid(parcelId)) return res.status(400).json({ message: "Invalid parcel ID" });
+
+  try {
+    const result = await parcelsCollection.updateOne(
+      { _id: new ObjectId(parcelId), riderCashedOut: { $ne: true } },
+      { $set: { riderCashedOut: true, cashedOutAt: new Date() } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).json({ message: "Already cashed out or parcel not found" });
+    }
+
+    res.json({ message: "Cashed out successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+  
 app.get("/riders", async (req, res) => {
   try {
-    const { status } = req.query; // ?status=available
+    const { status } = req.query; // এখানে district handle হচ্ছে না
     let query = {};
 
     if (status) {
-      // যদি DB তে field এর নাম "status" হয়
       query = { status: status.toLowerCase() };
     }
 
@@ -435,36 +506,157 @@ app.get("/riders", async (req, res) => {
   }
 });
 
+ // Admin-only: pending riders
+app.get('/riders/pending', verifyFBToken, verifyAdmin, async (req, res) => {
+  try {
+    const pendingRiders = await ridersCollection.find({ status: 'pending' }).toArray();
+    res.send(pendingRiders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: 'Server error', error: err.message });
+  }
+});
 
 
-    // Get active riders (admin)
-    app.get('/riders/active', verifyFBToken, verifyAdmin, async (req, res) => {
-      const activeRiders = await ridersCollection.find({ status: 'active' }).toArray();
-      res.json(activeRiders);
+
+// GET available riders by district
+app.get('/riders/available', async (req, res) => {
+  const { district } = req.query;
+  try {
+    if (!district) return res.status(400).send({ error: "District is required" });
+
+    // Relaxed regex & multiple statuses
+    const riders = await ridersCollection.find({
+      district: { $regex: district.trim(), $options: "i" },
+      status: { $in: ["available", "active"] } // status adjust
+    }).toArray();
+
+    res.send(riders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: err.message });
+  }
+});
+
+// Assign rider to parcel
+app.patch("/parcels/:id/assign-rider", async (req, res) => {
+  const parcelId = req.params.id;
+  const { riderId, riderName, riderEmail } = req.body;
+
+  try {
+    // Update parcel
+    await parcelsCollection.updateOne(
+      { _id: new ObjectId(parcelId) },
+      { $set: { 
+          delivery_status: "rider_assigned",
+          assigned_rider_id: riderId,
+          assigned_rider_name: riderName,
+          assigned_rider_email: riderEmail
+        } 
+      }
+    );
+
+    // Update rider status
+    await ridersCollection.updateOne(
+      { _id: new ObjectId(riderId) },
+      { $set: { work_status: "in-delivery", status: "busy" } }
+    );
+
+    res.status(200).send({ message: "Rider assigned successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: err.message });
+  }
+});
+
+// Get active riders (any logged-in user)
+app.get('/riders/active', verifyFBToken, verifyAdmin, async (req, res) => {
+  try {
+    const { search } = req.query; // query থেকে search term নাও
+    let query = { status: 'active' };
+
+    if (search) {
+      query.name = { $regex: search.trim(), $options: 'i' }; // case-insensitive search
+    }
+
+    const activeRiders = await ridersCollection.find(query).toArray();
+    res.json(activeRiders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+app.patch('/riders/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { status, email } = req.body;
+
+  try {
+    const result = await ridersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, email } }
+    );
+    if (result.modifiedCount > 0) {
+      res.status(200).json({ message: 'Rider updated' });
+    } else {
+      res.status(404).json({ message: 'Rider not found or no change' });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+
+// tracking update post API
+app.post("/tracking", async (req, res) => {
+  try {
+    const { trackingId, parcelId, status, location } = req.body;
+
+    // Validation
+    if (!trackingId || !parcelId || !status || !location) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    // ObjectId validate
+    const parcelObjectId = new ObjectId(parcelId);
+
+    // Insert tracking update
+    const result = await trackingCollection.insertOne({
+      trackingId,
+      parcelId: parcelObjectId,
+      status,
+      location,
+      timestamp: new Date(),
     });
 
-    // Tracking routes
-    app.post('/tracking', async (req, res) => {
-      const { parcelId, trackingId, status, location } = req.body;
-      const result = await trackingCollection.insertOne({
-        parcelId,
-        trackingId,
-        status,
-        location,
-        timestamp: new Date(),
-      });
-      res.status(201).json({ success: true, insertedId: result.insertedId });
-    });
+    // Update parcel status
+    await parcelsCollection.updateOne(
+      { _id: parcelObjectId },
+      { $set: { delivery_status: status } }
+    );
 
-    app.get('/tracking/:trackingId', async (req, res) => {
-      const updates = await trackingCollection
-        .find({ trackingId: req.params.trackingId })
-        .sort({ timestamp: 1 })
-        .toArray();
-      if (!updates.length)
-        return res.status(404).send({ message: 'No tracking info found' });
-      res.json(updates);
-    });
+    res.status(201).json({ message: "Tracking update added", insertedId: result.insertedId });
+  } catch (err) {
+    console.error("Error saving tracking:", err);
+    res.status(500).json({ error: "Server error", message: err.message });
+  }
+});
+
+
+
+  // get tracking updates by trackingId
+app.get("/tracking/:trackingId", async (req, res) => {
+  try {
+    const trackingId = req.params.trackingId;
+    const updates = await trackingCollection.find({ trackingId }).sort({ timestamp: 1 }).toArray();
+    res.json(updates);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
     // Stripe payment intent
     app.post('/create-payment-intent', async (req, res) => {
