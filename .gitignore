@@ -1,13 +1,22 @@
-node_modules
+# Node modules
+node_modules/
+
+# Environment variables
 .env
-.vercel
-/localmarket.firebase.admin.json
-logs
+
+# Vercel config
+.vercel/
+
+# Firebase secret
+localmarket.firebase.admin.json
+
+# Logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+
+# OS files
 .DS_Store
 Thumbs.db
-localmarket.firebase.admin.json
-localmarket.firebase.admin.json
