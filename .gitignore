@@ -7,11 +7,6 @@ node_modules/
 
 # Firebase secret
 localmarket.firebase.admin.json
-src/config/localmarket.firebase.admin.json
-
-# Nested Git repo
-local-market-serverside.git/
-
 # Logs
 logs
 *.log
