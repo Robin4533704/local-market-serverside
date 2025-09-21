@@ -4,19 +4,26 @@ import dotenv from 'dotenv';
 import { ObjectId } from 'mongodb';
 import { MongoClient, ServerApiVersion } from 'mongodb';
 import Stripe from 'stripe';
-import admin from 'firebase-admin';
+import admin from "firebase-admin";
 import fs from 'fs';
 import nodemailer from 'nodemailer';
+ import http from 'http';
+import { Server } from 'socket.io';
+
   
 dotenv.config();
 
-console.log("Stripe Key:", process.env.PAYMENT_GATWAY_KEY);
-
 const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
-const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+const app = express();
+const server = http.createServer(app);  
+
+app.use(cors({
+  origin: ["http://localhost:5173", "http://localhost:5174"],
+  credentials: true, 
+}));
+
 app.use(express.json());
 
 // Nodemailer transporter
@@ -39,7 +46,7 @@ if (!admin.apps.length) {
 }
 
 // MongoDB URI
-const uri = `mongodb://${process.env.DB_USER}:${process.env.DB_PASS}@ac-917gogp-shard-00-00.dvaruep.mongodb.net:27017,ac-917gogp-shard-00-01.dvaruep.mongodb.net:27017,ac-917gogp-shard-00-02.dvaruep.mongodb.net:27017/?ssl=true&replicaSet=atlas-v519q6-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0`;
+const uri =`mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.dvaruep.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -47,7 +54,13 @@ const client = new MongoClient(uri, {
     strict: true,
     deprecationErrors: true,
   },
+  connectTimeoutMS: 10000, 
+  socketTimeoutMS: 45000, 
+  maxPoolSize: 50,        
 });
+
+
+
 
 async function run() {
   try {
@@ -60,43 +73,54 @@ async function run() {
     const trackingCollection = db.collection('tracking');
     const paymentsCollection = db.collection('payments');
     const ridersCollection = db.collection('riders');
-    const productCollection = db.collection('products');
+    const productsCollection = db.collection('products');
     const ordersCollection = db.collection('orders');
     const notificationsCollection = db.collection("notifications");
-    const shoppingCollection = db.collection("shoppingdata");
+    const advertisementCollection = db.collection("advertisement");
+    const vandorCollection = db.collection("vendorProducts");
+    const watchlistCollection =db.collection("watchlist");
+ const priceHistoryCollection = db.collection("priceHistory");    
 
-    // Middleware: Firebase token verification
-    const verifyFBToken = async (req, res, next) => {
-      const authHeader = req.headers.authorization;
-      if (!authHeader) return res.status(401).json({ message: 'No token provided' });
-      const token = authHeader.split(' ')[1];
-      if (!token) return res.status(401).json({ message: 'Token not found' });
-      try {
-        const decodedToken = await admin.auth().verifyIdToken(token);
-        req.decoded = decodedToken;
-        next();
-      } catch (err) {
-        console.error('Token verification failed:', err);
-        res.status(401).json({ message: 'Invalid token' });
-      }
-    };
 
-    const verifyAdmin = async (req, res, next) => {
-      try {
-        const email = req.decoded?.email;
-        if (!email) return res.status(401).json({ message: 'No email in token' });
-        const user = await usersCollection.findOne({ email });
-        if (!user || user.role !== 'admin') {
-          return res.status(403).json({ message: 'Forbidden access' });
-        }
-        next();
-      } catch (err) {
-        console.error('verifyAdmin error:', err);
-        res.status(500).json({ message: 'Server error' });
-      }
-    };
+const verifyFBToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ message: "Unauthorized" });
 
-    const verifyRider = async (req, res, next) => {
+    const token = authHeader.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ message: "Invalid token" });
+  }
+};
+
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized: No token provided" });
+    }
+
+    const token = authHeader.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(token);
+
+    // শুধু decoded.admin চেক করো
+    if (!decoded.admin) {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    req.user = decoded; // attach করে দাও
+    next();
+  } catch (err) {
+    console.error("verifyAdmin error:", err.message);
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};
+
+
+ const verifyRider = async (req, res, next) => {
       try {
         const email = req.decoded.email;
         if (!email) return res.status(401).json({ message: 'No email in token' });
@@ -111,137 +135,654 @@ async function run() {
       }
     };
 
-    // GET role by email
-    app.get('/users/:email/role', verifyFBToken, async (req, res) => {
-      const { email } = req.params;
-      if (!email) return res.status(400).json({ error: 'Email is required' });
-      const user = await usersCollection.findOne({ email });
-      if (!user) return res.status(404).json({ error: 'User not found' });
-      res.json({ role: user.role || 'user' });
+// Express.js
+app.get("/users/:email/role", async (req, res) => {
+  const { email } = req.params;
+  try {
+    const user = await usersCollection.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ role: user.role || "user" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+app.patch("/users/:email/role", verifyFBToken, async (req, res) => {
+  try {
+    const adminEmail = req.user.email;
+    const adminUser = await usersCollection.findOne({ email: adminEmail });
+
+    if (!adminUser || adminUser.role !== "admin") {
+      return res.status(403).json({ message: "Only admin can update roles" });
+    }
+
+    const { email } = req.params;
+    const { newRole } = req.body;
+
+    const result = await usersCollection.updateOne(
+      { email },
+      { $set: { role: newRole } }
+    );
+
+    if (result.modifiedCount === 1) {
+      res.json({ success: true, message: `${email} is now a ${newRole}` });
+    } else {
+      res.status(404).json({ success: false, message: "User not found" });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// GET all users
+app.get("/", verifyAdmin, async (req, res) => {
+  try {
+    const users = await usersCollection.find({}).toArray();
+    res.json(users.map(u => ({ ...u, _id: u._id.toString() })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
+});
+
+// PUT update user role
+app.put("/:id/role", verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!["admin", "vendor", "user"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { role } }
+    );
+
+    res.json({ message: "User role updated" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update role" });
+  }
+});
+
+app.post("/watchlist", async (req, res) => {
+  try {
+    const { userEmail, productId, productName, productImage, marketName, price, date } = req.body;
+
+    // Check if already in watchlist
+    const exists = await watchlistCollection.findOne({ userEmail, productId });
+    if (exists) {
+      return res.status(400).json({ error: "Already in watchlist" });
+    }
+
+    const result = await watchlistCollection.insertOne({
+      userEmail,
+      productId,
+      productName,
+      productImage, // 🖼️ save image
+      marketName,
+      price,
+      date: date || new Date(),
     });
 
-    // Update user role (admin only)
-    app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async (req, res) => {
-      const { id } = req.params;
-      const { role } = req.body;
-      if (!['admin', 'user'].includes(role))
-        return res.status(400).json({ message: 'Invalid role' });
-      try {
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role } }
-        );
-        if (result.matchedCount === 0)
-          return res.status(404).json({ message: 'User not found' });
-        res.json({ message: `User role updated to ${role}`, modifiedCount: result.modifiedCount });
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to update user role' });
-      }
+    res.status(201).json({ success: true, _id: result.insertedId });
+  } catch (err) {
+    console.error("Add to watchlist error:", err);
+    res.status(500).json({ error: "Failed to add" });
+  }
+});
+
+
+// ➤ Get watchlist for user
+app.get("/watchlist/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    const items = await watchlistCollection.find({ userEmail: email }).toArray();
+    res.json(items);
+  } catch (err) {
+    console.error("Fetch watchlist error:", err);
+    res.status(500).json({ error: "Failed to fetch" });
+  }
+});
+
+// ➤ Remove from watchlist
+app.delete("/watchlist/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await watchlistCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete watchlist error:", err);
+    res.status(500).json({ error: "Failed to delete" });
+  }
+});
+
+
+app.post("/users", async (req, res) => {
+  try {
+    const user = req.body;
+    const existing = await usersCollection.findOne({ email: user.email });
+    if (existing) return res.status(400).send({ error: "User already exists" });
+
+    const result = await usersCollection.insertOne(user);
+
+    // Create notification for admin
+    await notificationsCollection.insertOne({
+      message: `New user registered: ${user.displayName}`,
+      fromRole: "user",
+      toRole: "admin",
+      userId: result.insertedId,
+      created_at: new Date().toISOString(),
+      status: "unread",
     });
 
-// Get all products
+    res.send({ success: true, userId: result.insertedId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Registration failed" });
+  }
+});
+
+app.post("/vendor/products", verifyFBToken, async (req, res) => {
+  const product = req.body;
+  product.vendorEmail = req.user.email;
+  product.status = "pending"; 
+  const result = await vandorCollection.insertOne(product);
+  res.status(201).json({ success: true, insertedId: result.insertedId });
+});
+
+// ✅ Get all products of logged-in vendor
+app.get("/vendor/products", verifyFBToken, async (req, res) => {
+  try {
+    const products = await vandorCollection
+      .find({ vendorEmail: req.user.email })
+      .toArray();
+
+    res.json(products);
+  } catch (err) {
+    console.error("Fetch Vendor Products Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+// একক product আনতে
+app.get("/vendor/products/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid product ID" });
+    }
+
+    const product = await vandorCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    res.json(product);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.put("/vendor/products/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    // Ensure ID is valid
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
+
+    const result = await vandorCollection.updateOne(
+      { _id: new ObjectId(id), vendorEmail: req.user.email }, // only allow vendor to update their product
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) return res.status(404).json({ message: "Product not found or not yours" });
+
+    res.json({ message: "Product updated successfully" });
+  } catch (err) {
+    console.error("Update product error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ✅ Delete vendor product
+app.delete("/vendor/products/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid ID" });
+    }
+
+    const result = await vandorCollection.deleteOne({
+      _id: new ObjectId(id),
+      vendorEmail: req.user.email, // ✅ শুধু নিজের প্রোডাক্ট delete করতে পারবে
+    });
+
+    if (result.deletedCount === 1) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ success: false, message: "Product not found" });
+    }
+  } catch (err) {
+    console.error("Delete Product Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ✅ Get all advertisements (Admin)
+app.get("/admin/advertisements", async (req, res) => {
+  try {
+    const ads = await advertisementCollection.find({}).toArray();
+    // Convert _id to string
+    const formattedAds = ads.map(ad => ({ ...ad, _id: ad._id.toString() }));
+    res.json(formattedAds);
+  } catch (err) {
+    console.error("Fetch admin advertisements error:", err);
+    res.status(500).json({ message: "Failed to fetch advertisements" });
+  }
+});
+
+// ✅ Get single advertisement by ID (Admin)
+app.get("/admin/advertisements/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid ID" });
+
+    const ad = await advertisementCollection.findOne({ _id: new ObjectId(id) });
+    if (!ad) return res.status(404).json({ message: "Advertisement not found" });
+
+    res.json({ ...ad, _id: ad._id.toString() });
+  } catch (err) {
+    console.error("Get advertisement error:", err);
+    res.status(500).json({ message: "Failed to get advertisement" });
+  }
+});
+
+// ✅ Update advertisement status or content (Admin)
+app.put("/admin/advertisements/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid ID" });
+
+    const result = await advertisementCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0)
+      return res.status(404).json({ message: "Advertisement not found" });
+
+    res.json({ success: true, message: "Advertisement updated successfully" });
+  } catch (err) {
+    console.error("Update advertisement error:", err);
+    res.status(500).json({ message: "Failed to update advertisement" });
+  }
+});
+
+// ✅ Delete advertisement (Admin)
+app.delete("/admin/advertisements/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid ID" });
+
+    const result = await advertisementCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0)
+      return res.status(404).json({ message: "Advertisement not found" });
+
+    res.json({ success: true, message: "Advertisement deleted successfully" });
+  } catch (err) {
+    console.error("Delete advertisement error:", err);
+    res.status(500).json({ message: "Failed to delete advertisement" });
+  }
+});
+
+
+
+// Get all orders (Admin)
+app.get("/admin/orders", async (req, res) => {
+  try {
+    const orders = await ordersCollection.find({}).toArray();
+    res.json(orders.map(o => ({ ...o, _id: o._id.toString() })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// Update order status
+app.put("/admin/orders/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid order ID" });
+
+    await ordersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update status" });
+  }
+});
+
+// Delete order
+app.delete("/admin/orders/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid order ID" });
+
+    const result = await ordersCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) return res.status(404).json({ error: "Order not found" });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete order" });
+  }
+});
+
+// Add Advertisement
+app.post("/vendor/advertisements", verifyFBToken, async (req, res) => {
+  try {
+    const ad = req.body;
+    ad.vendorEmail = req.user.email;
+    ad.status = "pending";
+    ad.date = new Date();
+
+    const result = await advertisementCollection.insertOne(ad);
+    res.status(201).json({ success: true, id: result.insertedId });
+  } catch (err) {
+    console.error("Error adding advertisement:", err);
+    res.status(500).json({ success: false, message: "Failed to add advertisement" });
+  }
+});
+
+// Get Ads by Vendor
+app.get("/vendor/advertisements/:email", verifyFBToken, async (req, res) => {
+  try {
+    if (req.user.email !== req.params.email)
+      return res.status(403).json({ success: false, message: "Forbidden" });
+
+    const ads = await advertisementCollection.find({ vendorEmail: req.params.email }).toArray();
+    res.json(ads);
+  } catch (err) {
+    console.error("Error fetching ads:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch ads" });
+  }
+});
+
+// Update Advertisement
+app.put("/vendor/advertisements/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+
+    const result = await advertisementCollection.updateOne(
+      { _id: new ObjectId(id), vendorEmail: req.user.email },
+      { $set: req.body }
+    );
+
+    if (result.matchedCount === 0)
+      return res.status(404).json({ success: false, message: "Advertisement not found or not authorized" });
+
+    res.json({ success: true, message: "Advertisement updated" });
+  } catch (err) {
+    console.error("Error updating ad:", err);
+    res.status(500).json({ success: false, message: "Failed to update ad" });
+  }
+});
+
+// Delete Advertisement
+app.delete("/vendor/advertisements/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid ID" });
+
+    const result = await advertisementCollection.deleteOne({ _id: new ObjectId(id), vendorEmail: req.user.email });
+
+    if (result.deletedCount === 0)
+      return res.status(404).json({ success: false, message: "Advertisement not found" });
+
+    res.json({ success: true, message: "Advertisement deleted" });
+  } catch (err) {
+    console.error("Error deleting ad:", err);
+    res.status(500).json({ success: false, message: "Failed to delete ad" });
+  }
+});
+
+
+// ✅ Get all products
 app.get("/products", async (req, res) => {
   try {
-    const products = await productCollection.find({}).toArray();
-    // ObjectId কে string-এ convert করতে হবে
-    const formatted = products.map(p => ({
-      ...p,
-      _id: p._id.toString()
-    }));
-    res.json(formatted);
+    const products = await productsCollection.find().toArray();
+    res.send(products); // array return করতে হবে
   } catch (err) {
+    console.error("Error fetching products:", err);
+    res.status(500).json({ message: "Failed to fetch products" });
+  }
+});
+
+app.post("/products", async (req, res) => {
+  try {
+    const product = req.body;
+    const result = await productsCollection.insertOne(product);
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("Add Product Error:", err);
+    res.status(500).json({ error: "Failed to add product" });
+  }
+});
+// Delete product
+app.delete("/products/:id",  async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
+
+    const result = await productsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) return res.status(404).json({ message: "Product not found" });
+
+    res.json({ success: true, message: "Product deleted 🗑️" });
+  } catch (err) {
+    console.error("Delete product error:", err);
+    res.status(500).json({ message: "Failed to delete product" });
+  }
+});
+
+app.put('/products/:id', verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedData = req.body;
+    const user = req.user; // ডিকোডেড ইউজার
+
+    // অনুমতি চেক করুন, যেমন রোল বা অধিকার
+    if (user.role !== 'admin') {
+      return res.status(403).json({ message: 'Forbidden: Insufficient permissions' });
+    }
+
+    // আইডি ভ্যালিডেশন
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid product ID' });
+    }
+
+    const product = await productsCollection.findOne({ _id: new ObjectId(id) });
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    const result = await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedData }
+    );
+
+    res.json({ success: true, message: 'Product updated successfully!' });
+  } catch (err) {
+    console.error('Update product error:', err);
+    res.status(500).json({ message: 'Failed to update product' });
+  }
+});
+
+app.get("/products/:id/price-trends", async (req, res) => {
+  try {
+    const productId = req.params.id;
+    let filter = ObjectId.isValid(productId)
+      ? { productId: new ObjectId(productId) }
+      : { productId };
+
+    const trends = await priceHistoryCollection.find(filter).sort({ date: 1 }).toArray();
+
+    // Fallback: empty array instead of 404
+    const transformed = trends.map(entry => {
+      const obj = { date: new Date(entry.date).toISOString().split("T")[0] };
+      if (Array.isArray(entry.items)) {
+        entry.items.forEach(i => { obj[i.item_name] = i.price });
+      } else if (entry.price) {
+        obj.price = entry.price;
+      }
+      return obj;
+    });
+
+    res.json(transformed); // 404 না দেওয়া, খালি array
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get all products (Admin)
+app.get("/admin/products", async (req, res) => {
+  try {
+    const products = await productsCollection.find({}).toArray();
+    res.json(products.map(p => ({ ...p, _id: p._id.toString() })));
+  } catch (err) {
+    console.error("Fetch admin products error:", err);
     res.status(500).json({ error: "Failed to fetch products" });
   }
 });
-
-app.get("/products/:id", async (req, res) => {
+// Update product (Admin)
+app.put("/admin/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await productCollection.findOne({ _id: new ObjectId(id) });
-    if (!product) return res.status(404).json({ message: "Product not found" });
-    res.json({ ...product, _id: product._id.toString() });
+    const updateData = req.body;
+
+    if (!ObjectId.isValid(id))
+      return res.status(400).json({ message: "Invalid product ID" });
+
+    const result = await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0)
+      return res.status(404).json({ message: "Product not found" });
+
+    res.json({ success: true, message: "Product updated ✅" });
   } catch (err) {
-    res.status(400).json({ message: "Invalid ID" });
+    console.error("Update product error:", err);
+    res.status(500).json({ message: "Failed to update product" });
   }
 });
 
-
-// order products
-app.post("/orders", async (req, res) => {
+// Approve product
+app.put("/products/:id/approve",  async (req, res) => {
   try {
-    const orderData = req.body;
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
 
-  
-    if (!orderData.products || !orderData.products.length)
-      return res.status(400).json({ message: "No products in order" });
-
-    let subtotal = 0;
-    orderData.products.forEach(p => {
-      subtotal += (p.price || 0) * (p.quantity || 1);
-    });
-    const discount = orderData.discount || 0;
-    const total = subtotal - discount;
-
-    const result = await orderCollection.insertOne({
-      ...orderData,
-      subtotal,
-      total,
-      paymentStatus: orderData.paymentStatus || "pending",
-      createdAt: new Date(),
-    });
-
-    res.status(201).json({
-      message: "Order created successfully",
-      orderId: result.insertedId,
-    });
+    await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: "approved" } }
+    );
+    res.json({ success: true, message: "Product approved ✅" });
   } catch (err) {
-    console.error("Failed to create order:", err);
-    res.status(500).json({ message: "Failed to create order", error: err.message });
+    console.error("Approve product error:", err);
+    res.status(500).json({ message: "Failed to approve product" });
   }
 });
 
-    // Create user
-    app.post('/users', async (req, res) => {
-      try {
-        const existingUser = await usersCollection.findOne({ email: req.body.email });
-        if (existingUser)
-          return res.status(400).json({ message: 'User already exists' });
-        const result = await usersCollection.insertOne(req.body);
-        res.status(201).json({ insertedId: result.insertedId });
-      } catch (err) {
-        res.status(500).json({ message: 'Error creating user', error: err.message });
-      }
-    });
+// Reject product
+app.put("/products/:id/reject",  async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
 
-    // Get all users
-    app.get('/users', async (req, res) => {
-      try {
-        const users = await usersCollection.find().project({ password: 0 }).toArray();
-        res.json(users);
-      } catch (error) {
-        console.error('Error fetching users:', error);
-        res.status(500).json({ message: 'Internal server error' });
-      }
-    });
+    await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: "rejected" } }
+    );
+    res.json({ success: true, message: "Product rejected ❌" });
+  } catch (err) {
+    console.error("Reject product error:", err);
+    res.status(500).json({ message: "Failed to reject product" });
+  }
+});
 
-    // Search users by email
-    app.get('/users/search', async (req, res) => {
-      const emailQuery = req.query.email;
-      if (!emailQuery)
-        return res.status(400).json({ message: 'Missing email query' });
-      try {
-        const regex = new RegExp(emailQuery, 'i');
-        const users = await usersCollection
-          .find({ email: { $regex: regex } })
-          .project({ email: 1, createdAt: 1, role: 1 })
-          .limit(10)
-          .toArray();
-        res.json(users);
-      } catch (error) {
-        console.error('Error fetching users:', error);
-        res.status(500).json({ message: 'Internal server error' });
-      }
-    });
+
+
+
+app.patch("/users/:id/role",  async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.body;
+
+  if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid user ID" });
+  if (!role) return res.status(400).json({ message: "Role is required" });
+
+  try {
+    const requester = await usersCollection.findOne({ email: req.user.email });
+    if (!requester || requester.role !== "admin") {
+      return res.status(403).json({ message: "Only admin can change roles" });
+    }
+
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { role } }
+    );
+
+    if (result.matchedCount === 0) return res.status(404).json({ message: "User not found" });
+    res.json({ success: true, message: `User role updated to ${role}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+app.get("/users",  async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+// Search user by email
+app.get("/users/search", verifyFBToken, async (req, res) => {
+  const { email } = req.query;
+  try {
+    const users = await usersCollection.find({ email: { $regex: email, $options: "i" } }).toArray();
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 
     // Parcel details by ID
     app.get('/parcels/:id', async (req, res) => {
@@ -299,31 +840,18 @@ app.post("/orders", async (req, res) => {
     });
 
     // Assign rider to parcel
-    app.patch('/parcels/:id/assign-rider', async (req, res) => {
-      const parcelId = req.params.id;
-      const { riderId, riderName, riderEmail } = req.body;
-      try {
-        await parcelsCollection.updateOne(
-          { _id: new ObjectId(parcelId) },
-          {
-            $set: {
-              delivery_status: 'rider_assigned',
-              assigned_rider_id: riderId,
-              assigned_rider_name: riderName,
-              assigned_rider_email: riderEmail,
-            },
-          }
-        );
-        await ridersCollection.updateOne(
-          { _id: new ObjectId(riderId) },
-          { $set: { work_status: 'in-delivery' } }
-        );
-        res.status(200).json({ message: 'Rider assigned successfully' });
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: err.message });
-      }
-    });
+   app.patch("/parcels/:id/assign-rider", async (req, res) => {
+  const { id } = req.params;
+  const { riderId, riderName } = req.body;
+  await parcelsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { assigned_rider_name: riderName } });
+
+  const msg = `Parcel ${id} assigned to ${riderName}`;
+  await notificationsCollection.insertOne({ message: msg, fromRole: "admin", toRole: "rider", status: "unread", createdAt: new Date() });
+
+  io.emit("notification", { message: msg });
+  res.json({ message: "Rider assigned and notification sent" });
+});
+
 
     // Update parcel status
     app.patch('/parcels/:id/status', async (req, res) => {
@@ -386,88 +914,177 @@ app.post("/orders", async (req, res) => {
     });
  
     
-app.get("/notifications", async (req, res) => {
-  const { toRole } = req.query;
-  const filter = toRole ? { toRole } : {}; // role না থাকলে সব notifications
-  const notifications = await notificationsCollection
-    .find(filter)
-    .sort({ createdAt: -1 })
-    .toArray();
-  res.send(notifications);
-});
-// User places an order
-app.post("/orders", async (req, res) => {
-  try {
-    const order = req.body;
-    const result = await ordersCollection.insertOne({
-      ...order,
-      createdAt: new Date(),
-    });
+app.post("/notifications", async (req, res) => {
+  const { message, fromRole, toRole, relatedOrder } = req.body;
 
-    // Notification for Admin
-    await notificationsCollection.insertOne({
-      message: `New order placed by ${order.userName}`,
-      fromRole: "user",
-      toRole: "admin",
-      relatedOrder: result.insertedId,
+  if (!message || !toRole) {
+    return res.status(400).send({ error: "message and toRole are required" });
+  }
+
+  try {
+    const notification = await notificationsCollection.insertOne({
+      message,
+      fromRole,
+      toRole,
+      relatedOrder: relatedOrder || null,
       status: "unread",
       createdAt: new Date(),
     });
 
-    res.send({ success: true, orderId: result.insertedId });
+    res.send({ success: true, notificationId: notification.insertedId });
   } catch (err) {
     console.error(err);
-    res.status(500).send({ success: false, error: err.message });
+    res.status(500).send({ error: "Failed to create notification" });
+  }
+});
+app.patch("/notifications/:id/read", async (req, res) => {
+  try {
+    await notificationsCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { status: "read" } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to mark as read" });
   }
 });
 
-app.post("/orders/:id/admin-accept", async (req, res) => {
-  const { id } = req.params;
+app.post("/orders", verifyFBToken, async (req, res) => {
+  try {
+    const order = req.body;
+    order.userEmail = req.user.email;
+    order._id = Date.now(); // numeric ID
 
-  const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
-  if (!order) return res.status(404).send({ success: false, error: "Order not found" });
-
-  // Update order status
-  await ordersCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: { status: "acceptedByAdmin" } }
-  );
-
-  // Rider কে notification পাঠানো
-  await notificationsCollection.insertOne({
-    message: `Admin approved order #${order._id}`,
-    fromRole: "admin",
-    toRole: "rider",
-    relatedOrder: order._id,
-    status: "unread",
-    createdAt: new Date(),
-  });
-
-  res.send({ success: true });
+    const result = await ordersCollection.insertOne(order);
+    res.send({ insertedId: order._id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to create order" });
+  }
 });
+
+app.get("/orders/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const email = req.user.email;
+
+    if (!ObjectId.isValid(id)) 
+      return res.status(400).send({ error: "Invalid order ID" });
+
+    const order = await ordersCollection.findOne({
+      _id: new ObjectId(id),
+      userEmail: email,
+    });
+
+    if (!order) return res.status(404).send({ error: "Order not found" });
+
+    res.send(order);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to fetch order" });
+  }
+});
+
+// (Optional) Delete Order
+app.delete("/orders/:id", verifyFBToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const email = req.user.email;
+    const result = await ordersCollection.deleteOne({
+      _id: new ObjectId(id),
+      userEmail: email, // শুধু নিজের order delete করতে পারবে
+    });
+
+    if (result.deletedCount > 0) {
+      res.send({ success: true });
+    } else {
+      res.status(404).send({ error: "Order not found or unauthorized" });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ error: "Failed to delete order" });
+  }
+});
+
+
+// Admin accepts order
+app.post("/orders/:orderId/accept-by-admin", async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const result = await ordersCollection.findOneAndUpdate(
+      { _id: new ObjectId(orderId) },
+      { $set: { adminAccepted: true, status: "admin_accepted" } },
+      { returnDocument: "after" }
+    );
+
+    const updatedOrder = result.value;
+
+    // Notify rider
+    const notification = {
+      message: `Order ready for delivery! ID: ${orderId}`,
+      fromRole: "admin",
+      toRole: "rider",
+      relatedOrder: orderId,
+      status: "unread",
+      createdAt: new Date(),
+    };
+    await notificationsCollection.insertOne(notification);
+
+    // Real-time push
+    io.emit("notification", notification);
+    io.emit("orderUpdated", updatedOrder);
+
+    res.json({ success: true, order: updatedOrder });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to accept order" });
+  }
+});
+
+
+
+
 
 // Rider accepts order
-app.post("/orders/:id/rider-accept", async (req, res) => {
-  const { id } = req.params;
-  const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+app.post("/orders/:orderId/accept-by-rider", async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const result = await ordersCollection.findOneAndUpdate(
+      { _id: new ObjectId(orderId) },
+      { $set: { riderAccepted: true, status: "rider_accepted" } },
+      { returnDocument: "after" }
+    );
 
-  if (!order) return res.status(404).send({ success: false, error: "Order not found" });
+    const updatedOrder = result.value;
 
-  await notificationsCollection.insertOne({
-    message: `Rider accepted your order #${order._id}`,
-    fromRole: "rider",
-    toRole: "user",
-    relatedOrder: order._id,
-    status: "unread",
-    createdAt: new Date(),
-  });
+    // Notify user
+    const notification = {
+      message: `Your order is on the way! ID: ${orderId}`,
+      fromRole: "rider",
+      toRole: "user",
+      relatedOrder: orderId,
+      status: "unread",
+      createdAt: new Date(),
+    };
+    await notificationsCollection.insertOne(notification);
 
-  res.send({ success: true });
+    // Real-time push
+    io.emit("notification", notification);
+    io.emit("orderUpdated", updatedOrder);
+
+    res.json({ success: true, order: updatedOrder });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to accept order by rider" });
+  }
 });
+
+
 
 
     // Rider signup
-    app.post('/riders', async (req, res) => {
+    app.post('/riders', verifyRider, async (req, res) => {
       const riderData = req.body;
       if (!riderData.email || !riderData.name)
         return res.status(400).json({ message: 'Name and email are required' });
@@ -632,7 +1249,7 @@ app.post("/orders/:id/rider-accept", async (req, res) => {
     });
 
     // Get active riders
-    app.get('/riders/active', verifyFBToken, verifyAdmin, async (req, res) => {
+    app.get('/riders/active', verifyFBToken,  async (req, res) => {
       const { search } = req.query;
       let query = { status: 'active' };
       if (search) query.name = { $regex: search.trim(), $options: 'i' };
@@ -698,7 +1315,7 @@ app.post("/orders/:id/rider-accept", async (req, res) => {
         res.status(500).json({ error: 'Server error' });
       }
     });
-
+ 
     // Create payment intent with Stripe
     app.post('/create-payment-intent', async (req, res) => {
       const { amountInCents, parcelId } = req.body;
@@ -710,67 +1327,178 @@ app.post("/orders/:id/rider-accept", async (req, res) => {
       res.json({ clientSecret: paymentIntent.client_secret });
     });
 
-    // Get payments for user
-    app.get('/payments', verifyFBToken, async (req, res) => {
-      const userEmail = req.query.email;
-      if (req.decoded.email !== userEmail)
-        return res.status(403).json({ message: 'Forbidden access' });
-      const payments = await paymentsCollection
-        .find({ email: userEmail })
-        .sort({ paid_at: -1 })
-        .toArray();
-      res.send(payments);
-    });
-
-    // Record a payment
-    app.post('/payments', async (req, res) => {
-      try {
-        const { parcelId, amount, email, transactionId, paymentMethod } = req.body;
-        if (!parcelId || !email || !transactionId || !amount)
-          return res.status(400).json({ message: 'Missing required fields' });
-        await parcelsCollection.updateOne(
-          { _id: new ObjectId(parcelId) },
-          { $set: { payment_status: 'paid' } }
-        );
-        const paymentEntry = {
-          parcelId: new ObjectId(parcelId),
-          email,
-          amount,
-          transactionId,
-          paymentMethod,
-          paid_at: new Date(),
-        };
-        const result = await paymentsCollection.insertOne(paymentEntry);
-        res.json({ message: 'Payment recorded', insertedId: result.insertedId });
-      } catch (err) {
-        console.error('Failed to record payment:', err);
-        res.status(500).json({ message: 'Internal server error', error: err.message });
-      }
-    });
-
-    // API route
-app.get("/shoppingdata", async (req, res) => {
+   
+// Payment recorded
+app.post('/payments', async (req, res) => {
   try {
-    const data = await shoppingCollection.find({}).toArray();
-    res.status(200).json(data);
+    const { parcelId, amount, email, transactionId, paymentMethod } = req.body;
+    if (!parcelId || !email || !transactionId || !amount)
+      return res.status(400).json({ message: 'Missing required fields' });
+
+    await parcelsCollection.updateOne(
+      { _id: new ObjectId(parcelId) },
+      { $set: { payment_status: 'paid' } }
+    );
+
+    const paymentEntry = {
+      parcelId: new ObjectId(parcelId),
+      email,
+      amount,
+      transactionId,
+      paymentMethod,
+      paid_at: new Date(),
+    };
+
+    const result = await paymentsCollection.insertOne(paymentEntry);
+
+    // Notification
+    const msg = `Payment of $${amount} received for parcel ${parcelId}`;
+    await notificationsCollection.insertOne({
+      message: msg,
+      fromRole: "user",
+      toRole: "admin",
+      relatedOrder: parcelId,   // ✅ relatedOrder added
+      status: "unread",
+      createdAt: new Date(),
+    });
+
+    io.emit("notification", {
+      message: msg,
+      relatedOrder: parcelId,
+    });
+
+    res.json({ message: 'Payment recorded', insertedId: result.insertedId });
   } catch (err) {
-    console.error("Error fetching data:", err);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error('Failed to record payment:', err);
+    res.status(500).json({ message: 'Internal server error', error: err.message });
+  }
+});
+// Socket.io init
+const io = new Server(server, {
+  cors: {
+    origin: ["http://localhost:5173", "http://localhost:5174"], // তোমার client origin
+    methods: ["GET", "POST"],
+  },
+});
+
+
+
+
+
+ 
+  // 🔑 Make Vendor (Admin Only)
+app.put("/make-vendor/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid User ID" });
+    }
+
+    try {
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { role: "vendor" } }
+      );
+
+      if (result.modifiedCount === 0) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      res.json({ success: true, message: "User promoted to Vendor" });
+    } catch (err) {
+      console.error("Error making vendor:", err);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  });
+
+app.post("/product/:id/reviews", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid product ID" });
+
+    const { userName, email, comment, rating } = req.body;
+    if (!userName || !email || !comment || !rating)
+      return res.status(400).json({ error: "All fields are required" });
+
+    const review = { userName, email, comment, rating, date: new Date() };
+
+    await productsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $push: { reviews: review } }
+    );
+
+    res.status(201).json(review);
+  } catch (err) {
+    console.error("Review Error:", err);
+    res.status(500).json({ error: "Failed to submit review" });
   }
 });
 
-// Example: fetching single product by id
-app.get("/shoppingdata/:id", async (req, res) => {
+app.get("/product/:id/reviews", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid product ID" });
+
+    const product = await productsCollection.findOne(
+      { _id: new ObjectId(id) },
+      { projection: { reviews: 1 } }
+    );
+
+    res.json(product?.reviews || []);
+  } catch (err) {
+    console.error("Fetch Reviews Error:", err);
+    res.status(500).json({ error: "Failed to fetch reviews" });
+  }
+});
+
+app.delete("/product/:id", async (req, res) => {
   try {
     const id = req.params.id;
-    const product = await shoppingCollection.findOne({ _id: new ObjectId(id) });
-    if (!product) return res.status(404).json({ message: "Product not found" });
-    res.status(200).json(product);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Internal Server Error" });
+    const result = await productsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 1) {
+      res.send({ success: true, deletedCount: 1 });
+    } else {
+      res.status(404).send({ success: false, message: "Product not found" });
+    }
+  } catch (error) {
+    console.error("Delete Error:", error);
+    res.status(500).send({ success: false, error: error.message });
   }
 });
+// Socket.io connection
+io.on("connection", (socket) => {
+ 
+
+  socket.on("disconnect", () => {
+   
+  });
+});
+
+app.post("/notify", async (req, res) => {
+  const { message, relatedOrder } = req.body;
+
+  const notification = {
+    message,
+    relatedOrder: relatedOrder || null,  // ✅ optional relatedOrder
+    status: "unread",
+    createdAt: new Date(),
+  };
+
+  await notificationsCollection.insertOne(notification);
+
+  io.emit("notification", notification);
+
+  res.send({ success: true, message: "Notification sent!" });
+});
+
+// Root route
+app.get("/", (req, res) => {
+  res.send("Parcel Delivery Server is Running");
+});
+
+
+
     // Verify MongoDB connection
     await client.db('admin').command({ ping: 1 });
     console.log('Pinged your deployment. You successfully connected to MongoDB!');
@@ -787,7 +1515,8 @@ app.get('/', (req, res) => {
   res.send('Parcel Delivery Server is Running');
 });
 
-// Start server listening
-app.listen(port, () => {
+
+// Start server
+server.listen(port, () => {
   console.log(`Server listening on port: ${port}`);
 });
