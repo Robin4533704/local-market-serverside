@@ -10,19 +10,42 @@ import nodemailer from 'nodemailer';
  import http from 'http';
 import { Server } from 'socket.io';
 
-  
 dotenv.config();
 
 const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
 const port = process.env.PORT || 5000;
 
 const app = express();
-const server = http.createServer(app);  
-
 app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:5174"],
-  credentials: true, 
+  origin: ["http://localhost:3000", "http://localhost:5173"],
+  credentials: true
 }));
+const server = http.createServer(app);
+  
+const io = new Server(server, {
+  cors: {
+    origin: "*", // React app URL দিতে পারেন
+    methods: ["GET", "POST"]
+  }
+});
+
+io.on("connection", (socket) => {
+  console.log("New client connected:", socket.id);
+
+  socket.on("disconnect", () => {
+    console.log("Client disconnected:", socket.id);
+  });
+
+  // Test notification
+  setInterval(() => {
+    socket.emit("notification", { message: "Hello from server!", createdAt: new Date() });
+  }, 5000);
+});
+
+server.listen(5000, () => {
+  console.log("Server running on port the 5000");
+});
+
 
 app.use(express.json());
 
@@ -567,16 +590,22 @@ app.delete("/vendor/advertisements/:id", verifyFBToken, async (req, res) => {
 });
 
 
-// ✅ Get all products
 app.get("/products", async (req, res) => {
   try {
+    if (!productsCollection) {
+      console.error("productsCollection is undefined!");
+      return res.status(500).json({ message: "Collection not initialized" });
+    }
+
     const products = await productsCollection.find().toArray();
-    res.send(products); // array return করতে হবে
+    console.log("Fetched products:", products.length); // দেখাবে কতটি item
+    res.send(products);
   } catch (err) {
     console.error("Error fetching products:", err);
     res.status(500).json({ message: "Failed to fetch products" });
   }
 });
+
 
 app.post("/products", async (req, res) => {
   try {
@@ -1373,20 +1402,7 @@ app.post('/payments', async (req, res) => {
     res.status(500).json({ message: 'Internal server error', error: err.message });
   }
 });
-// Socket.io init
-const io = new Server(server, {
-  cors: {
-    origin: ["http://localhost:5173", "http://localhost:5174"], // তোমার client origin
-    methods: ["GET", "POST"],
-  },
-});
-
-
-
-
-
- 
-  // 🔑 Make Vendor (Admin Only)
+// 🔑 Make Vendor (Admin Only)
 app.put("/make-vendor/:userId", async (req, res) => {
     const { userId } = req.params;
 
@@ -1466,31 +1482,12 @@ app.delete("/product/:id", async (req, res) => {
     res.status(500).send({ success: false, error: error.message });
   }
 });
-// Socket.io connection
-io.on("connection", (socket) => {
- 
 
-  socket.on("disconnect", () => {
-   
-  });
-});
 
-app.post("/notify", async (req, res) => {
-  const { message, relatedOrder } = req.body;
 
-  const notification = {
-    message,
-    relatedOrder: relatedOrder || null,  // ✅ optional relatedOrder
-    status: "unread",
-    createdAt: new Date(),
-  };
 
-  await notificationsCollection.insertOne(notification);
 
-  io.emit("notification", notification);
 
-  res.send({ success: true, message: "Notification sent!" });
-});
 
 // Root route
 app.get("/", (req, res) => {
@@ -1507,6 +1504,7 @@ app.get("/", (req, res) => {
   }
 }
 
+
 // Run server
 run().catch(console.dir);
 
@@ -1516,7 +1514,3 @@ app.get('/', (req, res) => {
 });
 
 
-// Start server
-server.listen(port, () => {
-  console.log(`Server listening on port: ${port}`);
-});
