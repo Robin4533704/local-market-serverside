@@ -31,10 +31,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Robin4533704/local-market-serverside.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Robin4533704/local-market-serverside/issues"
-  },
-  "homepage": "https://github.com/Robin4533704/local-market-serverside#readme",
-  "description": ""
+  }
+ 
 }
