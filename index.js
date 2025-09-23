@@ -16,20 +16,29 @@ const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
 const port = process.env.PORT || 5000;
 
 const app = express();
+
+
+const allowedOrigins = [
+  "http://localhost:5173", // Local dev
+  "https://daily-local-market.vercel.app", // Vercel frontend
+  "https://magenta-sfogliatella-b36abb.netlify.app", // Netlify frontend
+];
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  })
+);
+
 const server = http.createServer(app);
-app.use(cors({
-  origin: "https://daily-local-market.vercel.app",
-   methods: ['GET', 'POST'],
-  credentials: true
-}));
-
-
+// ✅ Socket.io তেও একই CORS config
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://daily-local-market.vercel.app"],
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 io.on("connection", (socket) => {
@@ -39,12 +48,14 @@ io.on("connection", (socket) => {
     console.log("Client disconnected:", socket.id);
   });
 
-  // Test notification
+  // Test notification প্রতি ৫ সেকেন্ড পর পর পাঠাবে
   setInterval(() => {
-    socket.emit("notification", { message: "Hello from server!", createdAt: new Date() });
+    socket.emit("notification", {
+      message: "Hello from server!",
+      createdAt: new Date(),
+    });
   }, 5000);
 });
-
 server.listen(5000, () => {
   console.log("Server running on port the 5000");
 });
