@@ -1,67 +1,33 @@
 import express from 'express';
-import cors from 'cors';
+import cors from 'cors'; 
 import dotenv from 'dotenv';
-import { ObjectId } from 'mongodb';
+import { ObjectId } from 'mongodb'; 
 import { MongoClient, ServerApiVersion } from 'mongodb';
-import Stripe from 'stripe';
-import admin from "firebase-admin";
-import fs from 'fs';
-import nodemailer from 'nodemailer';
- import http from 'http';
-import { Server } from 'socket.io';
+import Stripe from 'stripe'; 
+import admin from "firebase-admin"; 
+import fs from 'fs'; import nodemailer from 'nodemailer';
 
 dotenv.config();
 
-const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
-const port = process.env.PORT || 5000;
-
 const app = express();
-
-
+const port = process.env.PORT || 5000;
 const allowedOrigins = [
-  "http://localhost:5173", // Local dev
-  "https://daily-local-market.vercel.app", // Vercel frontend
-  "https://magenta-sfogliatella-b36abb.netlify.app", // Netlify frontend
+  "http://localhost:5173",
+  "https://daily-local-market.vercel.app",
+  "https://cheerful-dragon-eadeb2.netlify.app",
 ];
-app.use(
-  cors({
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true,
-  })
-);
 
-const server = http.createServer(app);
-// ✅ Socket.io তেও একই CORS config
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
-io.on("connection", (socket) => {
-  console.log("New client connected:", socket.id);
-
-  socket.on("disconnect", () => {
-    console.log("Client disconnected:", socket.id);
-  });
-
-  // Test notification প্রতি ৫ সেকেন্ড পর পর পাঠাবে
-  setInterval(() => {
-    socket.emit("notification", {
-      message: "Hello from server!",
-      createdAt: new Date(),
-    });
-  }, 5000);
-});
-server.listen(5000, () => {
-  console.log("Server running on port the 5000");
-});
-
-
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
+
+
+
+
+// Stripe setup
+const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
+
+
+
 
 // Nodemailer transporter
 const transporter = nodemailer.createTransport({
@@ -95,16 +61,9 @@ const client = new MongoClient(uri, {
   socketTimeoutMS: 45000, 
   maxPoolSize: 50,        
 });
-
-
-
-
 async function run() {
   try {
-    await client.connect();
-    console.log('✅ MongoDB connected');
-
-    const db = client.db('localmarketDB');
+   const db = client.db('localmarketDB');
     const parcelsCollection = db.collection('parcels');
     const usersCollection = db.collection('users');
     const trackingCollection = db.collection('tracking');
@@ -611,14 +570,26 @@ app.get("/api/products", async (req, res) => {
       return res.status(500).json({ message: "Collection not initialized" });
     }
 
-    const products = await productsCollection.find().toArray();
-    console.log("Fetched products:", products.length); // দেখাবে কতটি item
-    res.send(products);
+    // Query params থেকে page এবং limit নিন
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const products = await productsCollection
+      .find()
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    const total = await productsCollection.countDocuments();
+
+    res.json({ products, total, page, limit });
   } catch (err) {
     console.error("Error fetching products:", err);
     res.status(500).json({ message: "Failed to fetch products" });
   }
 });
+
 
 
 app.post("/api/products", async (req, res) => {
@@ -1493,12 +1464,7 @@ app.get("/api/products/:id/reviews", async (req, res) => {
 app.get("/", (req, res) => {
   res.send("Parcel Delivery Server is Running");
 });
-
-
-
-    // Verify MongoDB connection
-    await client.db('admin').command({ ping: 1 });
-    console.log('Pinged your deployment. You successfully connected to MongoDB!');
+ console.log('Pinged your deployment. You successfully connected to MongoDB!');
   } catch (err) {
     console.error('MongoDB connection failed:', err);
   }
@@ -1512,5 +1478,8 @@ run().catch(console.dir);
 app.get('/', (req, res) => {
   res.send('Parcel Delivery Server is Running');
 });
-
+ // Start server
+app.listen(port, () => {
+  console.log("Server running on port", port);
+});
 

@@ -1,8 +1,18 @@
 {
   "name": "daily-local-market-server",
   "version": "1.0.0",
-  "builds": [{"src": "./index.js","use": "@vercel/node"}],
-  "routes": [{"src": "/api(.*)","dest": "/index.js"}], 
+  "builds": [
+    {
+      "src": "./index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api(.*)",
+      "dest": "/index.js"
+    }
+  ],
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -22,7 +32,6 @@
     "mongodb": "^6.16.0",
     "mongoose": "^8.3.4",
     "nodemailer": "^7.0.5",
-    "socket.io": "^4.8.1",
     "stripe": "^18.0.0"
   },
   "devDependencies": {
@@ -32,5 +41,4 @@
     "type": "git",
     "url": "git+https://github.com/Robin4533704/local-market-serverside.git"
   }
- 
 }
