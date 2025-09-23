@@ -16,16 +16,19 @@ const stripe = new Stripe(process.env.PAYMENT_GATWAY_KEY);
 const port = process.env.PORT || 5000;
 
 const app = express();
+const server = http.createServer(app);
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:5173"],
+  origin: "https://daily-local-market.vercel.app",
+   methods: ['GET', 'POST'],
   credentials: true
 }));
-const server = http.createServer(app);
-  
+
+
 const io = new Server(server, {
   cors: {
-    origin: "*", // React app URL দিতে পারেন
-    methods: ["GET", "POST"]
+    origin: ["http://localhost:5173", "https://daily-local-market.vercel.app"],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -590,7 +593,7 @@ app.delete("/vendor/advertisements/:id", verifyFBToken, async (req, res) => {
 });
 
 
-app.get("/products", async (req, res) => {
+app.get("/api/products", async (req, res) => {
   try {
     if (!productsCollection) {
       console.error("productsCollection is undefined!");
@@ -607,7 +610,7 @@ app.get("/products", async (req, res) => {
 });
 
 
-app.post("/products", async (req, res) => {
+app.post("/api/products", async (req, res) => {
   try {
     const product = req.body;
     const result = await productsCollection.insertOne(product);
@@ -618,7 +621,7 @@ app.post("/products", async (req, res) => {
   }
 });
 // Delete product
-app.delete("/products/:id",  async (req, res) => {
+app.delete("/api/products/:id",  async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
@@ -633,7 +636,7 @@ app.delete("/products/:id",  async (req, res) => {
   }
 });
 
-app.put('/products/:id', verifyFBToken, async (req, res) => {
+app.put('/api/products/:id', verifyFBToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updatedData = req.body;
@@ -664,7 +667,7 @@ app.put('/products/:id', verifyFBToken, async (req, res) => {
   }
 });
 
-app.get("/products/:id/price-trends", async (req, res) => {
+app.get("/api/products/:id/price-trends", async (req, res) => {
   try {
     const productId = req.params.id;
     let filter = ObjectId.isValid(productId)
@@ -726,7 +729,7 @@ app.put("/admin/products/:id", async (req, res) => {
 });
 
 // Approve product
-app.put("/products/:id/approve",  async (req, res) => {
+app.put("/api/products/:id/approve",  async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
@@ -743,7 +746,7 @@ app.put("/products/:id/approve",  async (req, res) => {
 });
 
 // Reject product
-app.put("/products/:id/reject",  async (req, res) => {
+app.put("/api/products/:id/reject",  async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid product ID" });
@@ -1427,7 +1430,7 @@ app.put("/make-vendor/:userId", async (req, res) => {
     }
   });
 
-app.post("/product/:id/reviews", async (req, res) => {
+app.post("/api/products/:id/reviews", async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid product ID" });
@@ -1450,7 +1453,7 @@ app.post("/product/:id/reviews", async (req, res) => {
   }
 });
 
-app.get("/product/:id/reviews", async (req, res) => {
+app.get("/api/products/:id/reviews", async (req, res) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid product ID" });
@@ -1467,21 +1470,7 @@ app.get("/product/:id/reviews", async (req, res) => {
   }
 });
 
-app.delete("/product/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const result = await productsCollection.deleteOne({ _id: new ObjectId(id) });
 
-    if (result.deletedCount === 1) {
-      res.send({ success: true, deletedCount: 1 });
-    } else {
-      res.status(404).send({ success: false, message: "Product not found" });
-    }
-  } catch (error) {
-    console.error("Delete Error:", error);
-    res.status(500).send({ success: false, error: error.message });
-  }
-});
 
 
 
