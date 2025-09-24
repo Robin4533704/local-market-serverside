@@ -14,7 +14,7 @@ const port = process.env.PORT || 5000;
 const allowedOrigins = [
   "http://localhost:5173",
   "https://daily-local-market.vercel.app",
-  "https://keen-alpaca-3b851b.netlify.app",
+  "https://clinquant-medovik-2fb3b2.netlify.app",
 ];
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
